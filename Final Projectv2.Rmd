@@ -1,0 +1,388 @@
+---
+title: "Final Project"
+author: "Matt Roumeliotis, Ethan Remsberg"
+date: "May 21, 2019"
+output: html_document
+---
+
+## Introduction
+We want to compare two data tables to see how the different sets correlate with each other. For this specific case we want to compare how the overall stats and age for a professional soccer player in the video game FIFA compares with their real life estimated transfer market. The purpose of this is to show how we can use R to alter data tables and show correlations between two datasets that may not be obvious just by looking at them. We also want to show how useful this is for real world applications. We may even be able to get a glimpse of how FIFA decides what an overall score for a player should be.  
+
+## Libraries Used
+When using R we need to implement some library packages to make our lives easier when doing specialized things such as, string functions, html scraping, graphing, and data frame implementation. 
+
+rvest: Used to scrape our data table from an html source. We used it in this case to get our data from the soccer transfer market site www.transfermarkt.com. 
+
+dplyr: Let's us make useful data frames also known as tibbles. 
+
+tidyr: A library designed specifically for data tidying. Works well with the dplyr library.
+
+stringr: Very useful when we need to manipulate strings in our datasets. Includes the very useful gsub function which allows us to pass through a regular expression and substitute all instances of that regular expression with a better string. 
+
+ggplot2: An essential library package used for making plots. 
+
+magrittr: Adds some useful functions like set_colnames which as the name states let's us name our columns for out html scraped data table.
+
+broom: Useful for working with linear regression models.
+```{r}
+# Adding our different packages so we can implement useful library functions for later
+knitr::opts_chunk$set(echo = TRUE)
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(magrittr)
+library(broom)
+```
+## Useful links
+R Documentation:
+https://www.rdocumentation.org/
+
+Soccer Transfer Market Site: 
+https://www.transfermarkt.com/spieler-statistik/wertvollstespieler/marktwertetop
+
+Fifa 19 Dataset: 
+https://www.kaggle.com/karangadiya/fifa19
+
+R Regular Expressions: 
+https://rstudio-pubs-static.s3.amazonaws.com/74603_76cd14d5983f47408fdf0b323550b846.html
+
+Linear Regression:
+http://people.duke.edu/~rnau/regintro.htm
+
+Collinearity:
+https://www.statisticshowto.datasciencecentral.com/multicollinearity/
+
+## Scraping Our Dataset From the Web
+We will want to scrape our first table from the web. We chose to use www.transfermarkt.com to get our data of the estimated transfer market value for professional soccer players. 
+
+We will want to use the rvest package to scrape the html table from the website. We will use the read_html() function to read the html data from the website. Next we want to pin the data to just the table on the page using the html_node(). We will then use the html_table() to parse an html table into a data frame. We then set the names for our data frame which will likely be messy and have garbage values. We will clean these up later. Lastly, we need to turn the data table into a tibble with the as_tibble() function to make it easier for us to operate with the data table. 
+```{r}
+# url for the transfer market site
+url <- "https://www.transfermarkt.com/spieler-statistik/wertvollstespieler/marktwertetop?ajax=yw1&page=1"
+
+# Scraping our data from the url. Making a tibble (data frame) out of it
+value_tab <- read_html(url) %>%
+  html_node(".items") %>%
+  html_table(fill = TRUE) %>%
+  set_colnames(c("Rank", "Player", "??", "Name", "Position", "Age", "???", "????", "Value")) %>%
+  as_tibble() 
+
+value_tab
+```
+
+Unfortunately with this implementation we could only get the first page of the table. There are 20 pages in total on the website. To fix this, we make a for loop from 2 to 20 inclusive and do the same thing as before with a few exceptions. We have the for loop alter the url so that we go through the different pages of the table and with each iteration we also change our data table to bind the data table with itself and the new table that each iteration makes. This is used with the rbind() function which is a part of the base R language. 
+```{r}
+# Had to implement this for loop so that we could get the whole dataset from the site as the above code only # gets the first page of the table
+for(i in seq(2, 20)) {
+  url <- paste("https://www.transfermarkt.com/spieler-statistik/wertvollstespieler/marktwertetop?ajax=yw1&page=", i, sep = "")
+  tab <- read_html(url) %>%
+  html_node(".items") %>%
+  html_table(fill = TRUE) %>%
+  set_colnames(c("Rank", "Player", "??", "Name", "Position", "Age", "???", "????", "Value")) %>%
+  as_tibble()
+  
+  # binding the old table to the new table to combine them into one
+  value_tab <- rbind(value_tab, tab)
+}
+
+# Very messy data that we need to fix 
+value_tab %>%
+  slice(0:200)
+```
+
+## Dealing With Messy HTML Data
+We scraped the data table from the transfer market site but now what? Well, our data is very messy and unorganized. Now, we need to select the attributes from the data table that are actually useful and not garbage values. We do this with the select() function from the dplyr library. This only chooses attributes that we explicitly name in the code. We also want to filter out the data where rank is NA as that is useless to us. We can do this with the dplyr library function filter() and by checking if the rank column is NA with the is.na(attribute) function. 
+
+Our data is not completely cleaned up though. Our market_value attribute is currently a String, but we need it to be a numeric value to make it easier to work with in the future. We will use the gsub() function to replace anything that matches the regular expression inside with the replacement string that we give it. For this example, we changed the number to make it accurate to numbers in the millions and got rid of the "Mill." string attached to the end. We then change this attribute to a numeric with the as_numeric(attribute) function in the base R language. 
+```{r, warning=FALSE}
+# Will want to select the correct attributes from our messy table. 
+# Will filter it out to make sure no NA's are present in the data table and to get the correct amount of rows.
+value_tab <- value_tab %>%
+  select(Name, Position, Age, Value) %>%
+  filter(is.na(rank) == FALSE)
+
+# Filtering out the Million and the Euro symbol at the end of the market value attribute to make sure it can be turned into a numeric
+value_tab$Value <- gsub("([0-9]+),([0-9]{2}) Mill. \200", "\\1\\20000", value_tab$Value)
+
+# Turn the market value attribute into a numeric double
+value_tab$Value <- as.numeric(value_tab$Value)
+
+value_tab
+
+```
+
+Now, we need to prepare the transfer market table to be joined with the FIFA table. We will want to join the two tables together by name, therefore we will change the structure of each player's name to help match with the format of the FIFA table's names. We changed a few notable outliers like "Saúl" and "Countinho" to make sure it fit with the FIFA table's format. We used another gsub() function from the string library to write another regular expression and replace it with the format of "(First initial). (Last Name)".  
+```{r}
+# Changing an outlier in the data
+value_tab$Name[value_tab$Name == "Saúl Ñíguez"] <- "Saúl"
+
+# Change the names of the data so that we can match it better with the FIFA table. Changing it so that the format is first intial then last name 
+value_tab$Name <- gsub("([A-Z])\\S+ (.+)", "\\1. \\2", value_tab$Name)
+
+# Changing another outlier in Coutinho
+value_tab$Name[value_tab$Name == "P. Coutinho"] <- "Coutinho"
+
+value_tab
+```
+
+## Reading In A CSV File
+Now, that the transfer market data table is prepared we need to make the FIFA data table. We got the data from a CSV file found on www.kaggle.com. We use the read.csv() function call to take in a csv file and set it to a variable. We also add an encoding to allow us to read in the special characters, such as accented characters. We also slice the data as we don't need the whole dataset to work with since we don't have nearly as many players in the transfer market set as we do with the FIFA data set. We format the names the same way we did as before with the transfer market data set. Using the gsub() function from the string library we change the name format to "(First initial). (Last name)". We also have a few notable outliers in "Neymar" "David de Gea" and "Kevin De Bruyne" that we want to change so that they match as well. Then we want to select the proper attributes to give a good representation of what the data table looks like using the select() function and slice() function. 
+```{r}
+# Reads in csv file from local PC storage
+fifa_tab <- read.csv("data.csv", encoding = "UTF-8") %>%
+  slice(0:1000)
+
+# Change the fifa table now so that it matches with the value table. Same thing as before. 
+# Change the name format to first initial and then last name if it isn't already
+fifa_tab$Name <- gsub("([A-Z])\\S+ (.+)", "\\1. \\2", fifa_tab$Name)
+
+# Changing some outliers in the data
+fifa_tab$Name[fifa_tab$Name == "N. Jr"] = "Neymar"
+fifa_tab$Name[fifa_tab$Name == "D. Gea"] = "D. de Gea"
+fifa_tab$Name[fifa_tab$Name == "K. D. Bruyne"] = "K. De Bruyne"
+
+fifa_tab %>%
+  select(Name, Age, Overall, Position) %>%
+  slice(1:50)
+```
+
+## Joining Two Data Tables Together
+Here, all of our hard work finally pays off. We use an inner join from the dplyr library to join the FIFA table and the transfer market table together. We join them together by the "Name" attribute. We use an inner_join() here because we want all of the columns from the transfer market table and the FIFA table. We can still use inner_join() to join together names so that all of their attributes appear under one row. We select the Name and the Age from the transfer market table as that is more up to date. We then choose their Value from the transfer market table, their position from the FIFA table, and finally their Overall rating from the FIFA table. 
+```{r}
+# Join the two tables together by name
+tab <- fifa_tab %>%
+  inner_join(value_tab, by="Name") %>%
+  select(Name, Age.y, Value.y, Position.x, Overall) %>%
+  rename(Age = "Age.y", Value = "Value.y", Position = "Position.x")
+
+tab %>%
+  head()
+```
+
+## Using Age and Skill to Predict a Player's Rating
+Now we have a table that we can work with. The table is tidy with no missing data, and we have all of the information we need to begin our investigation. Our investigation will make heavy use of the linear regression technique. Linear regression revolves around attempting to minimize the residual sum of squares (RSS) of the data. RSS is the squared distance of each input from the linear regression line. In fact, linear regression is the line that minimizes the residual sum of squares if done perfectly. Much more detail can be given, but this should be a solid basis to understand the following analysis. More reading about the history and importance of linear regression can be found here: http://people.duke.edu/~rnau/regintro.htm.
+
+We being with our original assumption that the value of a player is heavily reliant on their overall ability and their age. As such, we can regress value on a player's age and overall rating to see if this assumption holds. Before we perform the regression, let's first see if we can intuitively see a linear relationship by plotting the data:
+
+```{r}
+tab %>%
+  ggplot(mapping = aes(x = Overall, y = Value, color = Age)) +
+  geom_point() + 
+  labs(title = "Players' Values, Overall Ratings, and Ages")
+```
+
+This is a scatter plot of our data, where the y position is a player's value, the x position is a player's overall rating, and the color is a player's age. The darker colors represent younger players. The code should be self-explanatory; we map variables to certain characteristics and choose the geometric representation by using geom_point.
+
+Intuitively, there does seem to be a relationship between value and overall, as well as value and age. As overall increases, value also looks to increase. Also, the dots appear to get darker as you go higher. However, something does seem concerning. The relationship is not convincingly linear; it appears it could be quadratic or even exponential. And, in fact, it is entirely possible that this relationship isn't linear. As such, we can transform the data to help with our investigation, without losing much interpretability. Watch what happens when we perform a logarithmic transformation to the value attribute:
+
+```{r}
+tab %>%
+  ggplot(mapping = aes(x = Overall, y = log10(Value), color = Age)) +
+  geom_point() + 
+  labs(title = "Logarithmic Transformation of Value", y = "Logarithmic Value", x = "Overall")
+```
+
+Now the data seems to have a much more linear relationship, and we can still interpret this graph. By using log base 10, we can effectively interpret the y position as "How many zeroes are at the end of a check to purchase this player?" From here on, we'll use log base ten of value in our analysis. Finally, we can perform our first linear regression. Here, we will regress value on both overall rating and age.
+
+```{r 3}
+tab %>%
+  ggplot(mapping = aes(x = Overall, y = log10(Value), color = Age)) +
+  geom_point() + 
+  geom_smooth(method = lm) + 
+  labs(title = "Regressing Value on Overall Rating and Age", y = "Logarithmic Value", x = "Overall")
+```
+
+The geom_smooth line adds a line of best fit, and the method argument tells it to use linear regression. It seems our intuition was correct; there is a definite correlation between value and a player's age and their skill. However, this is still intuition. How do we know that this relationship isn't caused by randomness of the data? Can we quantitively define how much of a relationship there is in a linear model? It turns out there is a way, which uses something called the p-value of linear regression.
+
+## Analysis of Linear Regression
+
+```{r}
+tab %>%
+  lm(formula = Value ~ Overall + Age) %>%
+  broom::tidy() %>%
+  select(term, estimate, p.value)
+```
+
+The two columns estimate and p.value are essential to understanding linear regression. First, the estimate of the Overall row is interpreted as: "Assuming every other attribute is held constant, if a player's Overall increases by 1, then the value of the player increases by ~7,000,000." Essentially, the estimate is the slope of the regression line assuming everything else is held constant. The p-value has a deeper meaning rooted in sampling and A/B testing, which can be read about more here: https://conductrics.com/pvalues. The general gist is this: first, assume that there is no correlation between the two attributes (that is, the estimate is 0, or the regression line is horizontal). Then, the p-value is the probability that there is a statistically significant difference from the assumption that there is no correlation. Generally, we say the difference is significant if the p-value is less than 0.05. 
+
+In this case, there is a significant correlation for both overall and age. So, if we performed regression on each of these separately, we are likely to still see a strong correlation and a linear fit to match. We begin with the overall statistic.
+
+```{r 5}
+tab %>%
+  ggplot(mapping = aes(x = Overall, y = log10(Value))) +
+  geom_point() +
+  geom_smooth(method = lm) + 
+  labs(title = "Regressing Value on Overall Rating", y = "Logarithmic Value", x = "Overall")
+```
+
+There's no surprises here. There is still a strong positive correlation between overall rating and value. 
+
+```{r}
+tab %>%
+  lm(formula = Value ~ Overall) %>%
+  broom::tidy() %>%
+  select(term, estimate, p.value)
+```
+
+This is further proof of our claim. We can confidently say that overall rating has an impact on a player's value. Now, we move on to age.
+
+```{r 4}
+tab %>%
+  ggplot(mapping = aes(x = Age, y = log10(Value))) +
+  geom_point() +
+  geom_smooth(method = lm) + 
+  labs(title = "Regressing Value on Age", y = "Logarithmic Value", x = "Overall")
+```
+
+This is also somewhat expected; lower aged players tend to have higher values. But, this correlation is much less obvious than the previous one. Intuitively, it'd be difficult to see the negative correlation. 
+
+```{r}
+tab %>%
+  lm(formula = Value ~ Age) %>%
+  broom::tidy() %>%
+  select(term, estimate, p.value)
+```
+In fact, this relationship isn't even statistically significant, since the p-value isn't less than 0.05. This is definitely concerning, since in the first example when we used overall and age as predictors, both had significant p-values. Why doesn't the same hold now? One way we can check what is going on is by looking at a plot of the residuals to see if there is some trend that is unseen in the original graphs. Ideally, the residuals would be spread uniformly about 0 and show no signs of a trend. Let's begin with the Value regressed on Overall, since we believe that is a good example of linear regression.
+
+```{r}
+log_tab <- tab
+log_tab$Value <- sapply(log_tab$Value, log10)
+log_tab %>%
+  lm(formula = Value ~ Overall) %>%
+  broom::augment() %>%
+  inner_join(log_tab, by = "Value", "Overall") %>%
+  ggplot(mapping = aes(x = Overall.y, y = .resid)) +
+  geom_point() + 
+  labs(title = "Plot of Residuals after Regression on Overall Rating", y = "Residuals", x = "Overall")
+```
+
+While not perfect, the residuals don't appear to increase or decrease as overall rating increases. Most estimates fall with +- 0.3 and there is a pretty even amount of data on both sides of 0. This graph is further evidence that a linear model is a good representation of the relationship between value and overall rating. Now, let's look at the same graph but replacing overall with age.
+
+```{r}
+log_tab %>%
+  lm(formula = Value ~ Age) %>%
+  broom::augment() %>%
+  inner_join(log_tab, by = "Value", "Age") %>%
+  ggplot(mapping = aes(x = Age.y, y = .resid)) +
+  geom_point() + 
+  labs(title = "Plot of Residuals after Regression on Age", y = "Residuals", x = "Age")
+```
+
+Notice now that the residuals are much larger above 0, and there seems to be a relationship between age and residual. Residual seems to peak when age is about 26 then starts to decline as you move away from 26. As such, this is evidence that there is not an obvious linear relationship between value and age. 
+
+## The Problem of Collinearity
+
+The obvious question is why was there a significant relationship for age only when it was included in a regression with overall rating? It turns out our problem is a common one within linear regression. The problem of _collinearity_ is caused when attempting to regress using two variables that have a linear relationship. More info here: https://www.statisticshowto.datasciencecentral.com/multicollinearity/. I'll demonstrate now that a player's overall rating is actually dependent on age.
+
+```{r}
+tab %>%
+  ggplot(mapping = aes(x = Age, y = Overall)) +
+  geom_point() +
+  geom_smooth(method = lm) + 
+  labs(title = "Collinearity of Overall Rating and Age", x = "Age", y = "Overall")
+```
+
+Intuitively, there is a clear correlation between age and rating.
+
+```{r}
+tab %>%
+  lm(formula = Overall ~ Age) %>%
+  broom::tidy() %>%
+  select(term, estimate, p.value)
+```
+
+The p-value shows the correlation is significant. Thus, age plays a role in how a player's overall rating is calculated by the makers of FIFA. The problem of collinearity is still mostly unsolved in terms of how to avoid it. In general, the best solution is to avoid regressing using two predictor variables that have a linear relationship. As such, we should not be using age as a predictor, and the best model we have so far is the one using only overall rating as the predictor of value.
+
+## Position as a Predictor
+
+Finally, I will investigate if a player's position impacts their value. First, I will divide the players into four types: forwards, midfielders, backs, and goalkeepers. To do this I will use the position FIFA assigns to each player. A forward will be one of: ST (striker), L/RW (left/right wing), or L/C/RF (left/center/right forward). Midfielders will be anything ending in M, while backs will end in B. Finally, goalkeepers must be GK.
+
+```{r}
+tab$Position <- sapply(tab$Position, as.character)
+tab <- tab %>%
+  mutate(Type = NA) 
+for(i in seq(1, nrow(tab))) {
+  if(endsWith(tab$Position[i], "M")) { 
+    tab$Type[i] <- "M"  
+  }
+  else if(endsWith(tab$Position[i], "B")) {
+    tab$Type[i] <- "B"
+  }
+  else if(tab$Position[i] == "GK") {
+    tab$Type[i] <- "G"
+  }
+  else {
+    tab$Type[i] <- "F"
+  }
+}
+tab %>%
+  slice(1:10)
+```
+
+Now that we've divided players into their types, let's see how our current model works based on these different positions.
+
+```{r}
+log_tab <- tab
+log_tab$Value <- sapply(log_tab$Value, log10)
+log_tab %>%
+  lm(formula = Value ~ Overall) %>%
+  broom::augment() %>%
+  inner_join(log_tab, by = "Value", "Overall") %>%
+  ggplot(mapping = aes(x = Type, y = .resid)) + 
+  geom_violin() + 
+  labs(title = "Residuals of Regressing Value on Overall by Type of Player", x = "Type", y = "Residual")
+```
+
+This is a plot of residuals for each type of player, except we are using a violin plot for each type of player. The interpretation of the violins is that the wider parts of the violin indicate a more frequent observed value. As such, the widest part of each violin is the mode. We are again looking to see that the residuals are centered around 0 with no trend across types of players. We see that this is mostly the case. While it's true that all of these violins seem to be centered slightly below zero, the violins do seem pretty uniformly spread about their centers. As such, we surmise that position does not have a large impact on a player's value using our current model.
+
+```{r}
+log_tab %>%
+  ggplot(mapping = aes(x = Overall, y = Value, color = Type)) +
+  geom_smooth(method = lm) + 
+  geom_point() + 
+  labs(title = "Regressing Value on Overall and Different Player Types", x = "Overall", y = "Logarithmic Value")
+```
+
+Perhaps surprisingly, we see that the slope of the regression line for backs is lower than that of the other three types. We can look at the p-values to see how significant this difference is.
+
+```{r}
+log_tab$Type <- factor(log_tab$Type, ordered = FALSE)
+log_tab$Type <- relevel(log_tab$Type, ref = 1)
+log_tab %>%
+  lm(formula = Value ~ Overall * Type) %>%
+  broom::tidy() %>%
+  slice(-(3:5)) %>%
+  select(term, estimate, p.value)
+```
+
+This table is confusing to interpret, mostly because it appears that only three of the four types of players are represented. What is actually happening is that each type does get its own term in the regression line and estimate, except that one of them is used as the "default" line. The first two lines of code make it so that the back type is the default, meaning the "Overall" row is really "Overall:TypeB". As such, we can see how different the other three types are from backs. From here we can glean that both forwards and midfielders are statistically significantly different from backs, while goalkeepers are not. Thus, it would make sense to at least split the players into two groups, forwards/midfielders and backs/goalkeepers, and perform regression.
+
+```{r}
+tab <- tab %>%
+  mutate(FM = ifelse(Type == "F" | Type == "M", "F/M", "B/G"))
+tab %>%
+  ggplot(mapping = aes(x = Overall, y = Value)) + 
+  facet_grid(cols = vars(FM)) + 
+  geom_point() + 
+  geom_smooth(method = lm) + 
+  labs(title = "Regression Faceted Into Two Groups of Players", x = "Overall", y = "Value")
+```
+
+When faceting the difference is made much clearer. Playing as a forward or midfielder definitely seems to increase your value more than if you are a back or goalkeeper. We can continue further and facet over all four positions.
+
+```{r}
+tab %>%
+  ggplot(mapping = aes(x = Overall, y = Value)) + 
+  facet_grid(cols = vars(Type)) + 
+  geom_point() + 
+  geom_smooth(method = lm) +
+  labs(title = "Regression Faceted Into Four Groups of Players", x = "Overall", y = "Value")
+```
+
+We can see that there is some variation between all four types of players. At this point we have a smaller sample size for each group, especially goalkeepers, so it is difficult to generalize these findings. At the very least, there is some evidence that a player's position also affects their value. In particular, the further up the field they play, the more money they are worth.
+
+## Conclusion
+
+In conclusion, we have accomplished all of the goals we set out to do. We found that a player's value is dependent on their age, overall rating, and position; but, since FIFA determines a player's rating using their age, predicting a player's value is most optimal when only using rating and position in linear regression. Whether or not these results can be applied to real world scenarios is another question, but we beileve that we have established some form of insight into how a player's value can be determined. 
