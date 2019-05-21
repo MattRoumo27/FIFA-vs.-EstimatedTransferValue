@@ -1,0 +1,143 @@
+---
+title: "Final Project"
+author: "Matt Roumeliotis, Ethan Remsberg"
+date: "May 21, 2019"
+output: html_document
+---
+## Introduction
+We want to compare two data tables to see how the differents sets correlate with each other. For this specific case we want to compare how the overall stats for a professional soccer player in the video game FIFA compares with their real life estimated transfer market. The purpose of this is to show how we can use R to alter data tables and show correlations between two datasets that may not be obvious just by looking at them. 
+
+## Libraries Used
+When using R we need to implement some library packages to make our lives easier when doing specialized things such as, string functions, html scraping, and data frame implementation. 
+
+rvest: Used to scrape our data table from an html source. We used it in this case to get our data from the soccer transfer market site www.transfermarkt.com. 
+
+dplyr: Let's us make useful data frames also known as tibbles. 
+
+stringr: Very useful when we need to manipulate strings in our datasets. Includes the very useful gsub functino which allows us to pass through a regular expression and substitute all instances of that regular expression with a better string. 
+
+ggplot2: An essential library package used for making plots. 
+
+magrittr: Adds some useful functions like set_colnames which as the name states let's us name our columns for out html scraped data table.
+```{r}
+# Adding our different packages so we can implement useful library functions for later
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(stringr)
+library(ggplot2)
+library(magrittr)
+```
+## Useful links
+Soccer Transfer Market Site: https://www.transfermarkt.com/spieler-statistik/wertvollstespieler/marktwertetop
+
+Fifa 19 Dataset: 
+https://www.kaggle.com/karangadiya/fifa19
+
+R Regular Expressions: https://rstudio-pubs-static.s3.amazonaws.com/74603_76cd14d5983f47408fdf0b323550b846.html
+
+## Scraping Our Dataset From the Web
+We will want to scrape our first table from the web. We chose to use www.transfermarkt.com to get our data of the estimated transfer market value for professional soccer players. 
+
+We will want to use the rvest package to scrape the html table from the website. We will use the read_html() function to read the html data from the website. Next we want to pin the data to just the table on the page using the html_node(). We will then use the html_table() to parse an html table into a data frame. We then set the names for our data frame which will likely be messy and have garbage values. We will clean these up later. Lastly, we need to turn the data table into a tibble with the as_tibble() function to make it easier for us to operate with the data table. 
+```{r}
+# url for the transfer market site
+url <- "https://www.transfermarkt.com/spieler-statistik/wertvollstespieler/marktwertetop?ajax=yw1&page=1"
+
+# Scraping our data from the url. Making a tibble (data frame) out of it
+value_tab <- read_html(url) %>%
+  html_node(".items") %>%
+  html_table(fill = TRUE) %>%
+  set_colnames(c("rank", "player", "na", "Name", "position", "age", "a", "b", "market_value")) %>%
+  as_tibble() 
+
+value_tab
+```
+
+Unfortunately with this implementation we could only get the first page of the table. There are 20 pages in total on the website. To fix this, we make a for loop from 2 to 20 inclusive and do the same thing as before with a few exceptions. We have the for loop alter the url so that we go through the different pages of the table and with each iteration we also change our data table to bind the data table with itself and the new table that each iteration makes. This is used with the rbind() function which is a part of the base R language. 
+```{r}
+# Had to implement this for loop so that we could get the whole dataset from the site as the above code only # gets the first page of the table
+for(i in seq(2, 20)) {
+  url <- paste("https://www.transfermarkt.com/spieler-statistik/wertvollstespieler/marktwertetop?ajax=yw1&page=", i, sep = "")
+  tab <- read_html(url) %>%
+  html_node(".items") %>%
+  html_table(fill = TRUE) %>%
+  set_colnames(c("rank", "player", "na", "Name", "position", "age", "a", "b", "market_value")) %>%
+  as_tibble()
+  
+  # binding the old table to the new table to combine them into one
+  value_tab <- rbind(value_tab, tab)
+}
+
+# Very messy data that we need to fix 
+value_tab %>%
+  slice(0:200)
+```
+
+## Dealing With Messy HTML Data
+We scraped the data table from the transfer market site but now what? Well, our data is very messy and unorganized. Now, we need to select the attributes from the data table that are actually useful and not garbage values. We do this with the select() function from the dplyr library. This only chooses attributes that we explicitly name in the code. We also want to filter out the data where rank is NA as that is useless to us. We can do this with the dplyr library function filter() and by checking if the rank column is NA with the is.na(attribute) function. 
+
+Our data is not completely cleaned up though. Our market_value attribute is currently a String, but we need it to be a numeric value to make it easier to work with in the future. We will use the gsub() function to replace anything that matches the regular expression inside with the replacement string that we give it. For this example, we changed the number to make it accurate to numbers in the millions and got rid of the "Mill." string attached to the end. We then change this attribute to a numeric with the as_numeric(attribute) function in the base R language. 
+```{r}
+# Will want to select the correct attributes from our messy table. 
+# Will filter it out to make sure no NA's are present in the data table and to get the correct amount of rows.
+value_tab <- value_tab %>%
+  select(rank, Name, position, age, market_value) %>%
+  filter(is.na(rank) == FALSE)
+
+# Filtering out the Million and the Euro symbol at the end of the market value attribute to make sure it can be turned into a numeric
+value_tab$market_value <- gsub("([0-9]+),([0-9]{2}) Mill. \200", "\\1\\20000", value_tab$market_value)
+
+# Turn the market value attribute into a numeric double
+value_tab$market_value <- as.numeric(value_tab$market_value)
+
+value_tab
+
+```
+
+Now, we need to prepare the transfer market table to be joined with the FIFA table. We will want to join the two tables together by name therefore, we will change the structure of each player's name to help match with the format of the FIFA table's names. We changed a few notable outliers like "Saúl" and "Countinho" to make sure it fit with the FIFA table's format. We used another gsub() function from the string library to write another regular expression and replace it with the format of "(First initial). (Last Name)".  
+```{r}
+# Changing an outlier in the data
+value_tab$Name[value_tab$Name == "Saúl Ñíguez"] <- "Saúl"
+
+# Change the names of the data so that we can match it better with the FIFA table. Changing it so that the format is first intial then last name 
+value_tab$Name <- gsub("([A-Z])\\S+ (.+)", "\\1. \\2", value_tab$Name)
+
+# Changing another outlier in Coutinho
+value_tab$Name[value_tab$Name == "P. Coutinho"] <- "Coutinho"
+
+value_tab
+```
+
+## Reading In A CSV File
+Now, that the transfer market data table is prepared we need to make the FIFA data table. We got the data from a CSV file found on www.kaggle.com. We use the read.csv() function call to take in a csv file and set it to a variable. We also add an encoding to allow us to read in the special characters, such as accented characters. We also slice the data as we don't need to whole dataset to work with since we don't have nearly as many players in the transfer market set as we do with the FIFA data set. We format the names the same way we did as before with the transfer market data set. Using the gsub() function from the string library we change the name format to "(First initial). (Last name)". We also have a few notable outliers in "Neymar" "David de Gea" and "Kevin De Bruyne" that we want to change so that they match as well. Then want to select the proper attributes to give a good representation of what the data table looks like using teh select() function and slice() function. 
+```{r}
+# Reads in csv file from local PC storage
+fifa <- read.csv("data.csv", encoding = "UTF-8") %>%
+  slice(0:1000)
+
+# Change the fifa table now so that it matches with the value table. Same thing as before. 
+# Change the name format to first initial and then last name if it isn't already
+fifa$Name <- gsub("([A-Z])\\S+ (.+)", "\\1. \\2", fifa$Name)
+
+# Changing some outliers in the data
+fifa$Name[fifa$Name == "N. Jr"] = "Neymar"
+fifa$Name[fifa$Name == "D. Gea"] = "D. de Gea"
+fifa$Name[fifa$Name == "K. D. Bruyne"] = "K. De Bruyne"
+
+fifa %>%
+  select(X.U.FEFF.Row ,Name, Overall, Potential, Club) %>%
+  slice(1:50)
+```
+
+## Joining Two Data Tables Together
+Here, all of our hard work finally pays off. We use an inner join from the dplyr library to join the transfer market table and the FIFA table together. We join them together by the "Name" attribute. We use an inner_join() here because we want all of the columns from the transfer market table and the FIFA table. We can still use inner_join() to join together names so that all of their attributes appear under one row. 
+```{r}
+# Join the two tables together by name
+value_tab %>%
+  inner_join(fifa, by="Name")
+```
+
+
+
